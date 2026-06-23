@@ -1,0 +1,11 @@
+.repo-update-wrap .repo-update-actions a {
+	margin-right: 4px;
+}
+
+.repo-update-wrap #repo-update-form-message {
+	margin-top: 12px;
+}
+
+.repo-update-wrap #repo-update-form-message .notice {
+	margin: 0;
+}

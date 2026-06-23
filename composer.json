@@ -1,0 +1,17 @@
+{
+    "name": "repo-update/wordpress-plugin",
+    "description": "Integrate GitHub repositories with the native WordPress update system",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "RepoUpdate\\": "src/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
