@@ -48,18 +48,25 @@ final class UpdaterCoordinator {
 	private Settings $settings;
 
 	/**
-	 * Active package URLs requiring auth headers.
-	 *
-	 * @var string[]
-	 */
-	private array $auth_urls = array();
-
-	/**
 	 * Repository currently being upgraded.
 	 *
 	 * @var Repository|null
 	 */
 	private ?Repository $upgrading_repo = null;
+
+	/**
+	 * Active package URL for authorized download.
+	 *
+	 * @var string
+	 */
+	private string $active_package_url = '';
+
+	/**
+	 * Active token for authorized download.
+	 *
+	 * @var string
+	 */
+	private string $active_download_token = '';
 
 	/**
 	 * @param RepositoryManager $repositories Repository manager.
@@ -90,6 +97,7 @@ final class UpdaterCoordinator {
 		add_filter( 'pre_set_site_transient_update_themes', array( $this, 'filter_theme_updates' ) );
 		add_filter( 'plugins_api', array( $this, 'plugin_information' ), 20, 3 );
 		add_filter( 'themes_api', array( $this, 'theme_information' ), 20, 3 );
+		add_filter( 'upgrader_pre_download', array( $this, 'before_package_download' ), 10, 4 );
 		add_filter( 'http_request_args', array( $this, 'authorize_package_download' ), 10, 2 );
 		add_filter( 'upgrader_pre_install', array( $this, 'prepare_backup' ), 10, 2 );
 		add_filter( 'upgrader_post_install', array( $this, 'fix_package_directory' ), 10, 3 );
@@ -99,17 +107,13 @@ final class UpdaterCoordinator {
 	}
 
 	/**
-	 * Inject plugin update data.
+	 * Inject plugin update data from cached repository state.
 	 *
 	 * @param object|false $transient Update transient.
 	 * @return object|false
 	 */
 	public function filter_plugin_updates( $transient ) {
-		if ( ! is_object( $transient ) ) {
-			return $transient;
-		}
-
-		if ( empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
+		if ( ! is_object( $transient ) || empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
 			return $transient;
 		}
 
@@ -124,43 +128,16 @@ final class UpdaterCoordinator {
 				continue;
 			}
 
-			$installed = SlugHelper::get_installed_version( 'plugin', $repo->target_slug );
+			$item = $this->build_plugin_update_item( $repo, $key );
 
-			if ( '' === $installed ) {
+			if ( null === $item ) {
 				continue;
 			}
 
-			if ( $this->repositories->is_due( $repo, $this->settings->get_check_interval() ) ) {
-				$this->repositories->check_repository( $repo, $this->github );
-				$repo = $this->repositories->find( $repo->id ) ?: $repo;
-			}
-
-			$remote  = $repo->remote_version ?: $installed;
-			$package = $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch );
-
-			$this->auth_urls[] = $package;
-
-			$update_available = version_compare( $installed, $remote, '<' );
-
-			$item = (object) array(
-				'id'            => $key,
-				'slug'          => dirname( $key ) === '.' ? basename( $key, '.php' ) : dirname( $key ),
-				'plugin'        => $key,
-				'new_version'   => $remote,
-				'url'           => 'https://github.com/' . $repo->owner . '/' . $repo->name,
-				'package'       => $package,
-				'icons'         => array(),
-				'banners'       => array(),
-				'banners_rtl'   => array(),
-				'tested'        => '',
-				'requires_php'  => '',
-				'compatibility' => new \stdClass(),
-			);
-
-			if ( $update_available ) {
-				$transient->response[ $key ] = $item;
+			if ( $item['update_available'] ) {
+				$transient->response[ $key ] = $item['data'];
 			} else {
-				$transient->no_update[ $key ] = $item;
+				$transient->no_update[ $key ] = $item['data'];
 			}
 		}
 
@@ -168,17 +145,13 @@ final class UpdaterCoordinator {
 	}
 
 	/**
-	 * Inject theme update data.
+	 * Inject theme update data from cached repository state.
 	 *
 	 * @param object|false $transient Update transient.
 	 * @return object|false
 	 */
 	public function filter_theme_updates( $transient ) {
-		if ( ! is_object( $transient ) ) {
-			return $transient;
-		}
-
-		if ( empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
+		if ( ! is_object( $transient ) || empty( $transient->checked ) || ! is_array( $transient->checked ) ) {
 			return $transient;
 		}
 
@@ -193,39 +166,87 @@ final class UpdaterCoordinator {
 				continue;
 			}
 
-			$installed = SlugHelper::get_installed_version( 'theme', $slug );
+			$item = $this->build_theme_update_item( $repo, $slug );
 
-			if ( '' === $installed ) {
+			if ( null === $item ) {
 				continue;
 			}
 
-			if ( $this->repositories->is_due( $repo, $this->settings->get_check_interval() ) ) {
-				$this->repositories->check_repository( $repo, $this->github );
-				$repo = $this->repositories->find( $repo->id ) ?: $repo;
-			}
-
-			$remote  = $repo->remote_version ?: $installed;
-			$package = $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch );
-
-			$this->auth_urls[] = $package;
-
-			$update_available = version_compare( $installed, $remote, '<' );
-
-			$item = array(
-				'theme'       => $slug,
-				'new_version' => $remote,
-				'url'         => 'https://github.com/' . $repo->owner . '/' . $repo->name,
-				'package'     => $package,
-			);
-
-			if ( $update_available ) {
-				$transient->response[ $slug ] = $item;
+			if ( $item['update_available'] ) {
+				$transient->response[ $slug ] = $item['data'];
 			} else {
-				$transient->no_update[ $slug ] = $item;
+				$transient->no_update[ $slug ] = $item['data'];
 			}
 		}
 
 		return $transient;
+	}
+
+	/**
+	 * Build plugin update transient item.
+	 *
+	 * @param Repository $repo Repository.
+	 * @param string     $key  Plugin key.
+	 * @return array{update_available: bool, data: object}|null
+	 */
+	private function build_plugin_update_item( Repository $repo, string $key ): ?array {
+		$installed = SlugHelper::get_installed_version( 'plugin', $repo->target_slug );
+
+		if ( '' === $installed ) {
+			return null;
+		}
+
+		$remote           = $repo->remote_version ?: $installed;
+		$update_available = version_compare( $installed, $remote, '<' );
+
+		return array(
+			'update_available' => $update_available,
+			'data'             => (object) array(
+				'id'            => $key,
+				'slug'          => dirname( $key ) === '.' ? basename( $key, '.php' ) : dirname( $key ),
+				'plugin'        => $key,
+				'new_version'   => $remote,
+				'url'           => 'https://github.com/' . $repo->owner . '/' . $repo->name,
+				'package'       => $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch ),
+				'icons'         => array(),
+				'banners'       => array(),
+				'banners_rtl'   => array(),
+				'tested'        => '',
+				'requires'      => '',
+				'requires_php'  => '',
+				'compatibility' => new \stdClass(),
+			),
+		);
+	}
+
+	/**
+	 * Build theme update transient item.
+	 *
+	 * @param Repository $repo Repository.
+	 * @param string     $slug Theme slug.
+	 * @return array{update_available: bool, data: array<string, string>}|null
+	 */
+	private function build_theme_update_item( Repository $repo, string $slug ): ?array {
+		$installed = SlugHelper::get_installed_version( 'theme', $slug );
+
+		if ( '' === $installed ) {
+			return null;
+		}
+
+		$remote           = $repo->remote_version ?: $installed;
+		$update_available = version_compare( $installed, $remote, '<' );
+
+		return array(
+			'update_available' => $update_available,
+			'data'             => array(
+				'theme'       => $slug,
+				'new_version' => $remote,
+				'url'         => 'https://github.com/' . $repo->owner . '/' . $repo->name,
+				'package'     => $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch ),
+				'requires'    => '',
+				'requires_php'=> '',
+			),
+		);
 	}
 
 	/**
@@ -309,27 +330,48 @@ final class UpdaterCoordinator {
 	}
 
 	/**
-	 * Add authorization header for GitHub package downloads.
+	 * Prepare authorized download for a managed package.
+	 *
+	 * @param bool|\WP_Error $reply      Download response.
+	 * @param string         $package    Package URL.
+	 * @param \WP_Upgrader   $upgrader   Upgrader instance.
+	 * @param array          $hook_extra Hook extra data.
+	 * @return bool|\WP_Error
+	 */
+	public function before_package_download( $reply, string $package, $upgrader, array $hook_extra ) {
+		$repo = $this->find_repo_from_hook_extra( $hook_extra );
+
+		if ( ! $repo ) {
+			return $reply;
+		}
+
+		$expected = $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch );
+
+		if ( $package !== $expected ) {
+			return $reply;
+		}
+
+		$this->upgrading_repo         = $repo;
+		$this->active_package_url     = $package;
+		$this->active_download_token  = $repo->get_token();
+
+		return $reply;
+	}
+
+	/**
+	 * Add authorization header for the active package download only.
 	 *
 	 * @param array  $args Request args.
 	 * @param string $url  Request URL.
 	 * @return array
 	 */
 	public function authorize_package_download( array $args, string $url ): array {
-		if ( strpos( $url, 'api.github.com' ) === false && strpos( $url, 'github.com' ) === false ) {
+		if ( '' === $this->active_package_url || $url !== $this->active_package_url ) {
 			return $args;
 		}
 
-		foreach ( $this->repositories->enabled() as $repo ) {
-			$package = $this->github->get_package_url( $repo->owner, $repo->name, $repo->branch );
-
-			if ( strpos( $url, $repo->owner . '/' . $repo->name ) !== false || $url === $package ) {
-				$token = $repo->get_token();
-
-				if ( '' !== $token ) {
-					$args['headers']['Authorization'] = 'Bearer ' . $token;
-				}
-			}
+		if ( '' !== $this->active_download_token ) {
+			$args['headers']['Authorization'] = 'Bearer ' . $this->active_download_token;
 		}
 
 		return $args;
@@ -338,12 +380,12 @@ final class UpdaterCoordinator {
 	/**
 	 * Create rollback backup before install.
 	 *
-	 * @param bool|array $response Install response.
-	 * @param array      $hook_extra Hook extra data.
-	 * @return bool|array
+	 * @param bool|\WP_Error $response   Install response.
+	 * @param array          $hook_extra Hook extra data.
+	 * @return bool|\WP_Error
 	 */
 	public function prepare_backup( $response, array $hook_extra ) {
-		$repo = $this->find_repo_from_hook_extra( $hook_extra );
+		$repo = $this->upgrading_repo ?: $this->find_repo_from_hook_extra( $hook_extra );
 
 		if ( ! $repo ) {
 			return $response;
@@ -367,9 +409,9 @@ final class UpdaterCoordinator {
 	 * @param bool  $response   Install response.
 	 * @param array $hook_extra Hook extra data.
 	 * @param array $result     Install result.
-	 * @return bool
+	 * @return bool|\WP_Error
 	 */
-	public function fix_package_directory( bool $response, array $hook_extra, array $result ): bool {
+	public function fix_package_directory( bool $response, array $hook_extra, array $result ) {
 		if ( empty( $result['destination'] ) ) {
 			return $response;
 		}
@@ -380,22 +422,33 @@ final class UpdaterCoordinator {
 			return $response;
 		}
 
-		$expected = basename( SlugHelper::get_install_path( $repo->type, $repo->target_slug ) );
-		$current  = basename( $result['destination'] );
+		$expected    = basename( SlugHelper::get_install_path( $repo->type, $repo->target_slug ) );
+		$current     = basename( $result['destination'] );
+		$destination = $result['destination'];
 
 		if ( $expected === $current ) {
 			return $response;
 		}
 
-		$parent      = dirname( $result['destination'] );
-		$new_dest    = $parent . '/' . $expected;
-		$destination = $result['destination'];
+		$parent   = dirname( $destination );
+		$new_dest = $parent . '/' . $expected;
 
 		if ( is_dir( $new_dest ) ) {
 			$this->rollback->remove_path( $new_dest );
 		}
 
-		@rename( $destination, $new_dest ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		\RepoUpdate\Helpers\FilesystemHelper::init();
+
+		if ( ! \RepoUpdate\Helpers\FilesystemHelper::move( $destination, $new_dest ) ) {
+			$this->logger->log(
+				'update_install',
+				sprintf( 'Failed to rename extracted package to %s.', $expected ),
+				Logger::LEVEL_ERROR,
+				$repo->id
+			);
+
+			return new \WP_Error( 'repo_update_rename_failed', __( 'Failed to normalize package directory after download.', 'repo-update' ) );
+		}
 
 		return $response;
 	}
@@ -403,7 +456,7 @@ final class UpdaterCoordinator {
 	/**
 	 * Ensure package installs to the existing target path.
 	 *
-	 * @param array $result Install result.
+	 * @param array $result     Install result.
 	 * @param array $hook_extra Hook extra data.
 	 * @return array
 	 */
@@ -424,19 +477,29 @@ final class UpdaterCoordinator {
 	}
 
 	/**
-	 * Log successful upgrades.
+	 * Log upgrade results and reset download state.
 	 *
 	 * @param \WP_Upgrader $upgrader Upgrader instance.
 	 * @param array        $options  Upgrade options.
 	 */
 	public function after_upgrade( $upgrader, array $options ): void {
-		if ( empty( $options['action'] ) || 'update' !== $options['action'] ) {
+		$repo = $this->upgrading_repo;
+
+		$this->clear_download_state();
+
+		if ( empty( $options['action'] ) || 'update' !== $options['action'] || ! $repo ) {
 			return;
 		}
 
-		$repo = $this->upgrading_repo;
+		if ( empty( $options['success'] ) ) {
+			$this->logger->log(
+				'update_install',
+				sprintf( 'Update failed for %s. Rollback may be available.', $repo->target_slug ),
+				Logger::LEVEL_ERROR,
+				$repo->id
+			);
+			set_transient( 'repo_update_failed_' . $repo->id, 1, DAY_IN_SECONDS );
 
-		if ( ! $repo ) {
 			return;
 		}
 
@@ -450,14 +513,12 @@ final class UpdaterCoordinator {
 			$repo->id
 		);
 
-		$this->upgrading_repo = null;
-
 		delete_site_transient( 'update_plugins' );
 		delete_site_transient( 'update_themes' );
 	}
 
 	/**
-	 * Show admin notices for available updates.
+	 * Show admin notices for available updates and failures.
 	 */
 	public function update_notices(): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
@@ -467,24 +528,46 @@ final class UpdaterCoordinator {
 		foreach ( $this->repositories->enabled() as $repo ) {
 			$notice = get_transient( 'repo_update_notice_' . $repo->id );
 
-			if ( ! $notice || ! $repo->notifications ) {
-				continue;
+			if ( $notice && $repo->notifications ) {
+				printf(
+					'<div class="notice notice-info is-dismissible"><p>%s</p></div>',
+					esc_html(
+						sprintf(
+							/* translators: 1: repository name, 2: version */
+							__( 'Update available for %1$s: version %2$s.', 'repo-update' ),
+							$repo->full_name(),
+							$notice
+						)
+					)
+				);
+
+				delete_transient( 'repo_update_notice_' . $repo->id );
 			}
 
-			printf(
-				'<div class="notice notice-info is-dismissible"><p>%s</p></div>',
-				esc_html(
-					sprintf(
-						/* translators: 1: repository name, 2: version */
-						__( 'Update available for %1$s: version %2$s.', 'repo-update' ),
-						$repo->full_name(),
-						$notice
+			if ( get_transient( 'repo_update_failed_' . $repo->id ) ) {
+				printf(
+					'<div class="notice notice-error"><p>%s</p></div>',
+					esc_html(
+						sprintf(
+							/* translators: %s: repository name */
+							__( 'Update failed for %s. A rollback backup may be available on the dashboard.', 'repo-update' ),
+							$repo->full_name()
+						)
 					)
-				)
-			);
+				);
 
-			delete_transient( 'repo_update_notice_' . $repo->id );
+				delete_transient( 'repo_update_failed_' . $repo->id );
+			}
 		}
+	}
+
+	/**
+	 * Reset per-download authorization state.
+	 */
+	private function clear_download_state(): void {
+		$this->upgrading_repo        = null;
+		$this->active_package_url    = '';
+		$this->active_download_token = '';
 	}
 
 	/**

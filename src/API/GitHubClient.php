@@ -17,7 +17,9 @@ use RepoUpdate\Settings\Settings;
  */
 final class GitHubClient implements ProviderInterface {
 
-	private const API_BASE = 'https://api.github.com';
+	private const API_BASE       = 'https://api.github.com';
+	private const CACHE_TTL      = 900;
+	private const MAX_RETRIES    = 2;
 
 	/**
 	 * @var Settings
@@ -63,6 +65,16 @@ final class GitHubClient implements ProviderInterface {
 	 * {@inheritDoc}
 	 */
 	public function get_branches( string $owner, string $name, string $token ): array {
+		$cache_key = 'repo_update_branches_' . md5( $owner . '/' . $name . '|' . $token );
+		$cached    = get_transient( $cache_key );
+
+		if ( is_array( $cached ) ) {
+			return array(
+				'success'  => true,
+				'branches' => $cached,
+			);
+		}
+
 		$branches = array();
 		$page     = 1;
 
@@ -101,6 +113,7 @@ final class GitHubClient implements ProviderInterface {
 		} while ( count( $batch ) === 100 );
 
 		sort( $branches );
+		set_transient( $cache_key, $branches, self::CACHE_TTL );
 
 		return array(
 			'success'  => true,
@@ -123,6 +136,16 @@ final class GitHubClient implements ProviderInterface {
 		$paths = $this->get_version_file_paths( $type, $target_slug, $plugin_file );
 
 		foreach ( $paths as $path ) {
+			$cache_key = 'repo_update_version_' . md5( $owner . '/' . $name . '|' . $branch . '|' . $path . '|' . $token );
+			$cached    = get_transient( $cache_key );
+
+			if ( is_string( $cached ) && '' !== $cached ) {
+				return array(
+					'success' => true,
+					'version' => $cached,
+				);
+			}
+
 			$response = $this->request(
 				'/repos/' . rawurlencode( $owner ) . '/' . rawurlencode( $name ) . '/contents/' . $path . '?ref=' . rawurlencode( $branch ),
 				$token
@@ -148,9 +171,11 @@ final class GitHubClient implements ProviderInterface {
 				continue;
 			}
 
-			$version = $this->parse_version_header( $content, 'theme' === $type );
+			$version = $this->parse_version_header( $content );
 
 			if ( '' !== $version ) {
+				set_transient( $cache_key, $version, self::CACHE_TTL );
+
 				return array(
 					'success' => true,
 					'version' => $version,
@@ -180,20 +205,46 @@ final class GitHubClient implements ProviderInterface {
 	 * Perform an authenticated GitHub API request.
 	 *
 	 * @param string $path  API path starting with /.
-	 * @param string $token Personal access token.
+	 * @param string $token Personal access token (optional for public repos).
 	 * @return array|\WP_Error
 	 */
 	public function request( string $path, string $token ) {
 		$args = array(
 			'timeout' => $this->settings->get_github_timeout(),
 			'headers' => array(
-				'Accept'        => 'application/vnd.github+json',
-				'Authorization' => 'Bearer ' . $token,
-				'User-Agent'    => 'Repo-Update-WordPress-Plugin',
+				'Accept'     => 'application/vnd.github+json',
+				'User-Agent' => 'Repo-Update-WordPress-Plugin',
 			),
 		);
 
-		return wp_remote_get( self::API_BASE . $path, $args );
+		if ( '' !== $token ) {
+			$args['headers']['Authorization'] = 'Bearer ' . $token;
+		}
+
+		$url      = self::API_BASE . $path;
+		$attempt  = 0;
+		$response = null;
+
+		while ( $attempt <= self::MAX_RETRIES ) {
+			$response = wp_remote_get( $url, $args );
+
+			if ( is_wp_error( $response ) ) {
+				++$attempt;
+				sleep( min( 2, $attempt ) );
+				continue;
+			}
+
+			$code = (int) wp_remote_retrieve_response_code( $response );
+
+			if ( $code < 500 && 403 !== $code ) {
+				break;
+			}
+
+			++$attempt;
+			sleep( min( 2, $attempt ) );
+		}
+
+		return $response;
 	}
 
 	/**
@@ -224,15 +275,10 @@ final class GitHubClient implements ProviderInterface {
 	/**
 	 * Parse Version from plugin or theme header content.
 	 *
-	 * @param string $content   File contents.
-	 * @param bool   $is_theme  Whether this is a theme stylesheet.
+	 * @param string $content File contents.
 	 */
-	private function parse_version_header( string $content, bool $is_theme ): string {
-		$pattern = $is_theme
-			? '/^[ \t\/*#@]*Version:(.+)$/mi'
-			: '/^[ \t\/*#@]*Version:(.+)$/mi';
-
-		if ( preg_match( $pattern, $content, $matches ) ) {
+	private function parse_version_header( string $content ): string {
+		if ( preg_match( '/^[ \t\/*#@]*Version:(.+)$/mi', $content, $matches ) ) {
 			return trim( $matches[1] );
 		}
 
@@ -251,6 +297,10 @@ final class GitHubClient implements ProviderInterface {
 
 		if ( 401 === $code ) {
 			return __( 'Authentication failed. Check your personal access token.', 'repo-update' );
+		}
+
+		if ( 403 === $code ) {
+			return __( 'GitHub API rate limit exceeded or access forbidden.', 'repo-update' );
 		}
 
 		if ( 404 === $code ) {

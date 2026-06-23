@@ -2,7 +2,11 @@
 	'use strict';
 
 	function showMessage(target, type, message) {
-		target.html('<div class="notice notice-' + type + '"><p>' + message + '</p></div>');
+		target.empty();
+		target.append(
+			$('<div>', { 'class': 'notice notice-' + type })
+				.append($('<p>').text(message))
+		);
 	}
 
 	$(document).on('click', '.repo-update-confirm', function (event) {
@@ -46,13 +50,13 @@
 					);
 				});
 
-				showMessage($message, 'success', 'Branches loaded.');
+				showMessage($message, 'success', repoUpdate.i18n.branchesLoaded);
 			})
 			.fail(function () {
 				showMessage($message, 'error', repoUpdate.i18n.error);
 			})
 			.always(function () {
-				$button.prop('disabled', false).text('Fetch Branches');
+				$button.prop('disabled', false).text(repoUpdate.i18n.fetchBranches);
 			});
 	});
 
@@ -76,13 +80,13 @@
 					return;
 				}
 
-				showMessage($message, 'success', response.data.message || 'Connection successful.');
+				showMessage($message, 'success', response.data.message || repoUpdate.i18n.connectionOk);
 			})
 			.fail(function () {
 				showMessage($message, 'error', repoUpdate.i18n.error);
 			})
 			.always(function () {
-				$button.prop('disabled', false).text('Test Connection');
+				$button.prop('disabled', false).text(repoUpdate.i18n.testConnection);
 			});
 	});
 })(jQuery);

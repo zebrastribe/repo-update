@@ -18,9 +18,9 @@ final class Encryption {
 	 * Encrypt a plaintext string.
 	 *
 	 * @param string $plaintext Value to encrypt.
-	 * @return string Base64-encoded ciphertext.
+	 * @return string|false Base64-encoded ciphertext or false on failure.
 	 */
-	public static function encrypt( string $plaintext ): string {
+	public static function encrypt( string $plaintext ) {
 		if ( '' === $plaintext ) {
 			return '';
 		}
@@ -30,7 +30,7 @@ final class Encryption {
 		$cipher = openssl_encrypt( $plaintext, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv );
 
 		if ( false === $cipher ) {
-			return '';
+			return false;
 		}
 
 		return base64_encode( $iv . $cipher );

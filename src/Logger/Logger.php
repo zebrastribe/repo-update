@@ -106,12 +106,14 @@ final class Logger {
 				'repository_id' => $repo_id,
 				'level'         => sanitize_key( $level ),
 				'action'        => sanitize_key( $action ),
-				'message'       => sanitize_text_field( $message ),
+				'message'       => wp_strip_all_tags( $message ),
 				'context'       => wp_json_encode( $context ),
 				'created_at'    => current_time( 'mysql' ),
 			),
 			array( '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
+
+		$this->prune_old_entries();
 	}
 
 	/**
@@ -140,6 +142,22 @@ final class Logger {
 		global $wpdb;
 
 		$wpdb->query( 'TRUNCATE TABLE ' . $this->table_name() ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+	}
+
+	/**
+	 * Delete logs older than the retention setting.
+	 */
+	public function prune_old_entries(): void {
+		global $wpdb;
+
+		$days = $this->settings->get_log_retention_days();
+
+		$wpdb->query(
+			$wpdb->prepare(
+				'DELETE FROM ' . $this->table_name() . ' WHERE created_at < %s',
+				gmdate( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) )
+			)
+		);
 	}
 
 	/**

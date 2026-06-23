@@ -10,6 +10,7 @@ declare(strict_types=1);
 namespace RepoUpdate\Repository;
 
 use RepoUpdate\API\GitHubClient;
+use RepoUpdate\Constants\RepositoryStatus;
 use RepoUpdate\Helpers\SlugHelper;
 use RepoUpdate\Logger\Logger;
 use RepoUpdate\Settings\Settings;
@@ -30,12 +31,31 @@ final class RepositoryManager {
 	private Logger $logger;
 
 	/**
-	 * @param RepositoryStore $store  Repository store.
-	 * @param Logger          $logger Logger instance.
+	 * @var Settings
 	 */
-	public function __construct( RepositoryStore $store, Logger $logger ) {
-		$this->store  = $store;
-		$this->logger = $logger;
+	private Settings $settings;
+
+	/**
+	 * @var GitHubClient
+	 */
+	private GitHubClient $github;
+
+	/**
+	 * @param RepositoryStore $store    Repository store.
+	 * @param Logger          $logger   Logger instance.
+	 * @param Settings        $settings Plugin settings.
+	 * @param GitHubClient    $github   GitHub client.
+	 */
+	public function __construct(
+		RepositoryStore $store,
+		Logger $logger,
+		Settings $settings,
+		GitHubClient $github
+	) {
+		$this->store    = $store;
+		$this->logger   = $logger;
+		$this->settings = $settings;
+		$this->github   = $github;
 	}
 
 	/**
@@ -113,11 +133,10 @@ final class RepositoryManager {
 	 * Check all repositories that are due.
 	 */
 	public function check_all_due(): void {
-		$settings = new Settings();
-
 		foreach ( $this->enabled() as $repo ) {
-			if ( $this->is_due( $repo, $settings->get_check_interval() ) ) {
-				$this->check_repository( $repo, new GitHubClient( $settings ) );
+			if ( $this->is_due( $repo, $this->settings->get_check_interval() ) ) {
+				$this->check_repository( $repo );
+				sleep( 1 );
 			}
 		}
 	}
@@ -125,27 +144,16 @@ final class RepositoryManager {
 	/**
 	 * Check a single repository for updates.
 	 *
-	 * @param Repository       $repo   Repository entity.
-	 * @param GitHubClient|null $client Optional GitHub client.
+	 * @param Repository $repo Repository entity.
 	 * @return array{success: bool, message: string, update_available?: bool}
 	 */
-	public function check_repository( Repository $repo, ?GitHubClient $client = null ): array {
-		$client = $client ?: new GitHubClient( new Settings() );
-		$token  = $repo->get_token();
-
-		if ( '' === $token ) {
-			$this->update_status( $repo->id, 'error', '', '', __( 'Missing access token.', 'repo-update' ) );
-
-			return array(
-				'success' => false,
-				'message' => __( 'Missing access token.', 'repo-update' ),
-			);
-		}
+	public function check_repository( Repository $repo ): array {
+		$token = $repo->get_token();
 
 		$installed = SlugHelper::get_installed_version( $repo->type, $repo->target_slug );
 
 		if ( '' === $installed ) {
-			$this->update_status( $repo->id, 'not_installed', $installed, '', __( 'Target is not installed.', 'repo-update' ) );
+			$this->update_status( $repo->id, RepositoryStatus::NOT_INSTALLED, $installed, '', __( 'Target is not installed.', 'repo-update' ) );
 
 			return array(
 				'success' => false,
@@ -153,7 +161,7 @@ final class RepositoryManager {
 			);
 		}
 
-		$result = $client->get_remote_version(
+		$result = $this->github->get_remote_version(
 			$repo->owner,
 			$repo->name,
 			$token,
@@ -163,17 +171,14 @@ final class RepositoryManager {
 			$repo->plugin_file
 		);
 
-		$this->logger->log(
-			'update_check',
-			$result['success']
-				? sprintf( 'Checked %s: remote version %s.', $repo->full_name(), $result['version'] ?? '' )
-				: sprintf( 'Check failed for %s: %s', $repo->full_name(), $result['message'] ?? '' ),
-			$result['success'] ? Logger::LEVEL_INFO : Logger::LEVEL_ERROR,
-			$repo->id
-		);
-
 		if ( ! $result['success'] ) {
-			$this->update_status( $repo->id, 'error', $installed, '', $result['message'] ?? '' );
+			$this->update_status( $repo->id, RepositoryStatus::ERROR, $installed, '', $result['message'] ?? '' );
+			$this->logger->log(
+				'update_check',
+				sprintf( 'Check failed for %s: %s', $repo->full_name(), $result['message'] ?? '' ),
+				Logger::LEVEL_ERROR,
+				$repo->id
+			);
 
 			return array(
 				'success' => false,
@@ -181,9 +186,9 @@ final class RepositoryManager {
 			);
 		}
 
-		$remote            = (string) $result['version'];
-		$update_available  = version_compare( $installed, $remote, '<' );
-		$status            = $update_available ? 'update_available' : 'up_to_date';
+		$remote           = (string) $result['version'];
+		$update_available = version_compare( $installed, $remote, '<' );
+		$status           = $update_available ? RepositoryStatus::UPDATE_AVAILABLE : RepositoryStatus::UP_TO_DATE;
 
 		$this->store->update_status(
 			$repo->id,
@@ -193,6 +198,13 @@ final class RepositoryManager {
 				'remote_version'    => $remote,
 				'status'            => $status,
 			)
+		);
+
+		$this->logger->log(
+			'update_check',
+			sprintf( 'Checked %s: remote version %s.', $repo->full_name(), $remote ),
+			Logger::LEVEL_INFO,
+			$repo->id
 		);
 
 		if ( $update_available && $repo->notifications ) {
@@ -209,10 +221,28 @@ final class RepositoryManager {
 	}
 
 	/**
+	 * Validate that a target slug matches the selected type.
+	 *
+	 * @param string $type        plugin|theme.
+	 * @param string $target_slug Target identifier.
+	 */
+	public function validate_target( string $type, string $target_slug ): bool {
+		if ( '' === $target_slug ) {
+			return false;
+		}
+
+		if ( 'theme' === $type ) {
+			return wp_get_theme( $target_slug )->exists();
+		}
+
+		return array_key_exists( $target_slug, SlugHelper::get_installed_plugins() );
+	}
+
+	/**
 	 * Determine whether a repository check is due.
 	 *
-	 * @param Repository $repo          Repository entity.
-	 * @param int        $global_hours  Global interval in hours.
+	 * @param Repository $repo         Repository entity.
+	 * @param int        $global_hours Global interval in hours.
 	 */
 	public function is_due( Repository $repo, int $global_hours ): bool {
 		$hours = $repo->check_interval > 0 ? $repo->check_interval : $global_hours;
@@ -265,7 +295,7 @@ final class RepositoryManager {
 				'last_updated'      => current_time( 'mysql' ),
 				'installed_version' => $version,
 				'remote_version'    => $version,
-				'status'            => 'up_to_date',
+				'status'            => RepositoryStatus::UP_TO_DATE,
 			)
 		);
 	}

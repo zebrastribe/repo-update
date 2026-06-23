@@ -9,6 +9,8 @@ declare(strict_types=1);
 
 namespace RepoUpdate\Admin;
 
+use RepoUpdate\Helpers\Capabilities;
+
 /**
  * Registers admin pages and menus.
  */
@@ -57,7 +59,29 @@ final class AdminMenu {
 	 */
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'add_menus' ) );
+		add_action( 'admin_init', array( $this->settings, 'register' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
+		add_filter( 'plugin_action_links_' . REPO_UPDATE_BASENAME, array( $this, 'plugin_action_links' ) );
+	}
+
+	/**
+	 * Add settings link on plugins page.
+	 *
+	 * @param string[] $links Plugin action links.
+	 * @return string[]
+	 */
+	public function plugin_action_links( array $links ): array {
+		if ( ! Capabilities::can_manage() ) {
+			return $links;
+		}
+
+		$links[] = sprintf(
+			'<a href="%s">%s</a>',
+			esc_url( admin_url( 'admin.php?page=repo-update' ) ),
+			esc_html__( 'Dashboard', 'repo-update' )
+		);
+
+		return $links;
 	}
 
 	/**
@@ -67,7 +91,7 @@ final class AdminMenu {
 		add_menu_page(
 			__( 'Repo Update', 'repo-update' ),
 			__( 'Repo Update', 'repo-update' ),
-			'manage_options',
+			Capabilities::MANAGE,
 			'repo-update',
 			array( $this->dashboard, 'render' ),
 			'dashicons-update',
@@ -78,7 +102,7 @@ final class AdminMenu {
 			'repo-update',
 			__( 'Dashboard', 'repo-update' ),
 			__( 'Dashboard', 'repo-update' ),
-			'manage_options',
+			Capabilities::MANAGE,
 			'repo-update',
 			array( $this->dashboard, 'render' )
 		);
@@ -87,7 +111,7 @@ final class AdminMenu {
 			'repo-update',
 			__( 'Repositories', 'repo-update' ),
 			__( 'Repositories', 'repo-update' ),
-			'manage_options',
+			Capabilities::MANAGE,
 			'repo-update-repositories',
 			array( $this->repositories, 'render' )
 		);
@@ -96,7 +120,7 @@ final class AdminMenu {
 			'repo-update',
 			__( 'Settings', 'repo-update' ),
 			__( 'Settings', 'repo-update' ),
-			'manage_options',
+			Capabilities::MANAGE,
 			'repo-update-settings',
 			array( $this->settings, 'render' )
 		);
@@ -105,7 +129,7 @@ final class AdminMenu {
 			'repo-update',
 			__( 'Logs', 'repo-update' ),
 			__( 'Logs', 'repo-update' ),
-			'manage_options',
+			Capabilities::MANAGE,
 			'repo-update-logs',
 			array( $this->logs, 'render' )
 		);
@@ -148,6 +172,10 @@ final class AdminMenu {
 					'confirmClear'    => __( 'Are you sure you want to clear all logs?', 'repo-update' ),
 					'loading'         => __( 'Loading...', 'repo-update' ),
 					'error'           => __( 'Request failed.', 'repo-update' ),
+					'branchesLoaded'  => __( 'Branches loaded.', 'repo-update' ),
+					'fetchBranches'   => __( 'Fetch Branches', 'repo-update' ),
+					'testConnection'  => __( 'Test Connection', 'repo-update' ),
+					'connectionOk'    => __( 'Connection successful.', 'repo-update' ),
 				),
 			)
 		);

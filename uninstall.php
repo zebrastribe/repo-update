@@ -23,23 +23,8 @@ $wpdb->query( 'DROP TABLE IF EXISTS ' . $wpdb->prefix . 'repo_update_logs' ); //
 delete_option( 'repo_update_settings' );
 delete_option( 'repo_update_db_version' );
 
-$backup_root = WP_CONTENT_DIR . '/repo-update-backups';
+require_once plugin_dir_path( __FILE__ ) . 'src/Helpers/FilesystemHelper.php';
 
-if ( is_dir( $backup_root ) ) {
-	$iterator = new RecursiveIteratorIterator(
-		new RecursiveDirectoryIterator( $backup_root, RecursiveDirectoryIterator::SKIP_DOTS ),
-		RecursiveIteratorIterator::CHILD_FIRST
-	);
-
-	foreach ( $iterator as $item ) {
-		if ( $item->isDir() ) {
-			rmdir( $item->getPathname() );
-		} else {
-			unlink( $item->getPathname() );
-		}
-	}
-
-	rmdir( $backup_root );
-}
+\RepoUpdate\Helpers\FilesystemHelper::delete_directory( WP_CONTENT_DIR . '/repo-update-backups' );
 
 wp_clear_scheduled_hook( 'repo_update_check_all' );

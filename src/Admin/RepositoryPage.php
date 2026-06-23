@@ -10,6 +10,8 @@ declare(strict_types=1);
 namespace RepoUpdate\Admin;
 
 use RepoUpdate\API\GitHubClient;
+use RepoUpdate\Admin\ListTables\RepositoriesListTable;
+use RepoUpdate\Helpers\Capabilities;
 use RepoUpdate\Helpers\Encryption;
 use RepoUpdate\Helpers\SlugHelper;
 use RepoUpdate\Repository\Repository;
@@ -51,7 +53,7 @@ final class RepositoryPage {
 	 * Render repository page.
 	 */
 	public function render(): void {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! Capabilities::can_manage() ) {
 			wp_die( esc_html__( 'You do not have permission to access this page.', 'repo-update' ) );
 		}
 
@@ -80,7 +82,8 @@ final class RepositoryPage {
 	 * Render repository list.
 	 */
 	private function render_list(): void {
-		$repos = $this->repositories->all();
+		$table = new RepositoriesListTable( $this->repositories );
+		$table->prepare_items();
 		?>
 		<div class="wrap repo-update-wrap">
 			<h1 class="wp-heading-inline"><?php esc_html_e( 'Repositories', 'repo-update' ); ?></h1>
@@ -89,37 +92,7 @@ final class RepositoryPage {
 			</a>
 			<hr class="wp-header-end">
 			<?php settings_errors( 'repo_update' ); ?>
-			<table class="wp-list-table widefat fixed striped">
-				<thead>
-					<tr>
-						<th><?php esc_html_e( 'Repository', 'repo-update' ); ?></th>
-						<th><?php esc_html_e( 'Type', 'repo-update' ); ?></th>
-						<th><?php esc_html_e( 'Target', 'repo-update' ); ?></th>
-						<th><?php esc_html_e( 'Branch', 'repo-update' ); ?></th>
-						<th><?php esc_html_e( 'Enabled', 'repo-update' ); ?></th>
-						<th><?php esc_html_e( 'Actions', 'repo-update' ); ?></th>
-					</tr>
-				</thead>
-				<tbody>
-					<?php if ( empty( $repos ) ) : ?>
-						<tr><td colspan="6"><?php esc_html_e( 'No repositories found.', 'repo-update' ); ?></td></tr>
-					<?php else : ?>
-						<?php foreach ( $repos as $repo ) : ?>
-							<tr>
-								<td><?php echo esc_html( $repo->full_name() ); ?></td>
-								<td><?php echo esc_html( ucfirst( $repo->type ) ); ?></td>
-								<td><?php echo esc_html( $repo->target_slug ); ?></td>
-								<td><?php echo esc_html( $repo->branch ); ?></td>
-								<td><?php echo $repo->enabled ? esc_html__( 'Yes', 'repo-update' ) : esc_html__( 'No', 'repo-update' ); ?></td>
-								<td>
-									<a href="<?php echo esc_url( admin_url( 'admin.php?page=repo-update-repositories&action=edit&id=' . $repo->id ) ); ?>"><?php esc_html_e( 'Edit', 'repo-update' ); ?></a> |
-									<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=repo-update-repositories&action=delete&id=' . $repo->id ), 'repo_update_delete_' . $repo->id ) ); ?>" class="repo-update-confirm" data-message="<?php esc_attr_e( 'Delete this repository?', 'repo-update' ); ?>"><?php esc_html_e( 'Delete', 'repo-update' ); ?></a>
-								</td>
-							</tr>
-						<?php endforeach; ?>
-					<?php endif; ?>
-				</tbody>
-			</table>
+			<?php $table->display(); ?>
 		</div>
 		<?php
 	}
@@ -175,7 +148,7 @@ final class RepositoryPage {
 					<tr>
 						<th scope="row"><label for="token"><?php esc_html_e( 'Personal Access Token', 'repo-update' ); ?></label></th>
 						<td>
-							<input name="token" id="token" type="password" class="regular-text" value="" autocomplete="new-password" <?php echo $repo ? '' : 'required'; ?>>
+							<input name="token" id="token" type="password" class="regular-text" value="" autocomplete="new-password">
 							<p class="description">
 								<?php
 								if ( $repo && $repo->get_token() ) {
@@ -185,7 +158,7 @@ final class RepositoryPage {
 										esc_html( Encryption::mask_token( $repo->get_token() ) )
 									);
 								} else {
-									esc_html_e( 'Required for private repositories. Stored encrypted.', 'repo-update' );
+									esc_html_e( 'Optional for public repositories. Required for private repos. Stored encrypted.', 'repo-update' );
 								}
 								?>
 							</p>
@@ -271,7 +244,7 @@ final class RepositoryPage {
 			wp_die( esc_html__( 'Security check failed.', 'repo-update' ) );
 		}
 
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! Capabilities::can_manage() ) {
 			return;
 		}
 
@@ -279,8 +252,9 @@ final class RepositoryPage {
 		$target_slug = sanitize_text_field( wp_unslash( $_POST['target_slug'] ?? '' ) );
 		$plugin_file = 'plugin' === $type ? $target_slug : '';
 
-		if ( 'theme' === $type ) {
-			$target_slug = sanitize_text_field( wp_unslash( $_POST['target_slug'] ?? '' ) );
+		if ( ! $this->repositories->validate_target( $type, $target_slug ) ) {
+			add_settings_error( 'repo_update', 'repo_update_error', __( 'Selected target does not match the repository type.', 'repo-update' ), 'error' );
+			return;
 		}
 
 		$data = array(
@@ -301,8 +275,11 @@ final class RepositoryPage {
 		);
 
 		if ( 0 === $data['id'] && '' === $data['token'] ) {
-			add_settings_error( 'repo_update', 'repo_update_error', __( 'Personal access token is required.', 'repo-update' ), 'error' );
-			return;
+			$test = $this->github->test_connection( $data['owner'], $data['name'], '' );
+			if ( ! $test['success'] ) {
+				add_settings_error( 'repo_update', 'repo_update_error', __( 'A personal access token is required for this repository.', 'repo-update' ), 'error' );
+				return;
+			}
 		}
 
 		$id = $this->repositories->save( $data );
@@ -329,7 +306,7 @@ final class RepositoryPage {
 			return;
 		}
 
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! Capabilities::can_manage() ) {
 			return;
 		}
 

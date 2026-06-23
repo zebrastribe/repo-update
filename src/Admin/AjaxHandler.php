@@ -10,10 +10,10 @@ declare(strict_types=1);
 namespace RepoUpdate\Admin;
 
 use RepoUpdate\API\GitHubClient;
+use RepoUpdate\Helpers\Capabilities;
 use RepoUpdate\Logger\Logger;
 use RepoUpdate\Repository\RepositoryManager;
 use RepoUpdate\Rollback\RollbackManager;
-use RepoUpdate\Settings\Settings;
 
 /**
  * Handles AJAX requests from admin UI.
@@ -36,11 +36,6 @@ final class AjaxHandler {
 	private Logger $logger;
 
 	/**
-	 * @var Settings
-	 */
-	private Settings $settings;
-
-	/**
 	 * @var RollbackManager
 	 */
 	private RollbackManager $rollback;
@@ -49,20 +44,17 @@ final class AjaxHandler {
 	 * @param RepositoryManager $repositories Repository manager.
 	 * @param GitHubClient      $github       GitHub client.
 	 * @param Logger            $logger       Logger.
-	 * @param Settings          $settings     Settings.
 	 * @param RollbackManager   $rollback     Rollback manager.
 	 */
 	public function __construct(
 		RepositoryManager $repositories,
 		GitHubClient $github,
 		Logger $logger,
-		Settings $settings,
 		RollbackManager $rollback
 	) {
 		$this->repositories = $repositories;
 		$this->github       = $github;
 		$this->logger       = $logger;
-		$this->settings     = $settings;
 		$this->rollback     = $rollback;
 	}
 
@@ -87,7 +79,7 @@ final class AjaxHandler {
 		$id    = (int) ( $_POST['id'] ?? 0 );
 
 		if ( '' === $token && $id > 0 ) {
-			$repo = $this->repositories->find( $id );
+			$repo  = $this->repositories->find( $id );
 			$token = $repo ? $repo->get_token() : '';
 		}
 
@@ -112,7 +104,7 @@ final class AjaxHandler {
 		$id    = (int) ( $_POST['id'] ?? 0 );
 
 		if ( '' === $token && $id > 0 ) {
-			$repo = $this->repositories->find( $id );
+			$repo  = $this->repositories->find( $id );
 			$token = $repo ? $repo->get_token() : '';
 		}
 
@@ -132,11 +124,15 @@ final class AjaxHandler {
 	public function delete_backup(): void {
 		$this->authorize();
 
-		$id = (int) ( $_POST['id'] ?? 0 );
+		$id   = (int) ( $_POST['id'] ?? 0 );
 		$repo = $this->repositories->find( $id );
 
 		if ( ! $repo ) {
 			wp_send_json_error( array( 'message' => __( 'Repository not found.', 'repo-update' ) ) );
+		}
+
+		if ( ! Capabilities::can_delete_backup( $repo->type ) ) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'repo-update' ) ), 403 );
 		}
 
 		$this->rollback->delete_backup( $repo->type, $repo->target_slug );
@@ -149,7 +145,7 @@ final class AjaxHandler {
 	 * Verify AJAX permissions.
 	 */
 	private function authorize(): void {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! Capabilities::can_manage() ) {
 			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'repo-update' ) ), 403 );
 		}
 

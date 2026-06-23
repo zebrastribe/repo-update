@@ -57,12 +57,12 @@ final class Container {
 	 * @return object
 	 */
 	private function create( string $id ): object {
-		$settings  = $this->getSettings();
-		$logger    = $this->getLogger();
-		$store     = $this->getRepositoryStore();
-		$manager   = $this->getRepositoryManager();
-		$github    = $this->getGitHubClient();
-		$rollback  = $this->getRollbackManager();
+		$settings = $this->getSettings();
+		$logger   = $this->getLogger();
+		$store    = $this->getRepositoryStore();
+		$manager  = $this->getRepositoryManager();
+		$github   = $this->getGitHubClient();
+		$rollback = $this->getRollbackManager();
 
 		switch ( $id ) {
 			case Settings::class:
@@ -82,7 +82,7 @@ final class Container {
 			case UpdaterCoordinator::class:
 				return new UpdaterCoordinator( $manager, $github, $logger, $rollback, $settings );
 			case CronScheduler::class:
-				return new CronScheduler( $manager, $settings, $logger );
+				return new CronScheduler( $manager, $settings );
 			case AdminMenu::class:
 				return new AdminMenu(
 					$this->get( DashboardPage::class ),
@@ -91,15 +91,15 @@ final class Container {
 					$this->get( LogsPage::class )
 				);
 			case DashboardPage::class:
-				return new DashboardPage( $manager, $settings );
+				return new DashboardPage( $manager, $rollback, $settings );
 			case RepositoryPage::class:
 				return new RepositoryPage( $manager, $github, $settings );
 			case SettingsPage::class:
-				return new SettingsPage( $settings, $logger, $store );
+				return new SettingsPage( $settings, $logger );
 			case LogsPage::class:
 				return new LogsPage( $logger );
 			case AjaxHandler::class:
-				return new AjaxHandler( $manager, $github, $logger, $settings, $rollback );
+				return new AjaxHandler( $manager, $github, $logger, $rollback );
 			default:
 				throw new \InvalidArgumentException( sprintf( 'Unknown service: %s', $id ) );
 		}
@@ -145,7 +145,9 @@ final class Container {
 		if ( ! isset( $this->services[ RepositoryManager::class ] ) ) {
 			$this->services[ RepositoryManager::class ] = new RepositoryManager(
 				$this->getRepositoryStore(),
-				$this->getLogger()
+				$this->getLogger(),
+				$this->getSettings(),
+				$this->getGitHubClient()
 			);
 		}
 

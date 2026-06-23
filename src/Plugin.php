@@ -11,6 +11,7 @@ namespace RepoUpdate;
 
 use RepoUpdate\Admin\AdminMenu;
 use RepoUpdate\Admin\AjaxHandler;
+use RepoUpdate\Upgrade\Migrator;
 use RepoUpdate\Updater\UpdaterCoordinator;
 
 /**
@@ -55,6 +56,8 @@ final class Plugin {
 	 */
 	public function boot(): void {
 		load_plugin_textdomain( 'repo-update', false, dirname( REPO_UPDATE_BASENAME ) . '/languages' );
+
+		add_action( 'plugins_loaded', array( Migrator::class, 'maybe_upgrade' ) );
 
 		$this->container->get( UpdaterCoordinator::class )->register();
 		$this->container->get( CronScheduler::class )->register();

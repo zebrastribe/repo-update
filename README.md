@@ -16,7 +16,7 @@ A production-quality WordPress plugin that integrates GitHub repositories with t
 
 - WordPress 5.8+
 - PHP 7.4+ with OpenSSL
-- GitHub personal access token (required for private repos; recommended for higher rate limits)
+- GitHub personal access token (optional for public repositories; required for private repos)
 
 ## Installation
 
@@ -43,7 +43,17 @@ A production-quality WordPress plugin that integrates GitHub repositories with t
 
 ### Rollback
 
-When rollback is enabled for a repository, the plugin backs up the current install before updating. Use **Rollback** on the dashboard to restore the previous version.
+When rollback is enabled for a repository, the plugin backs up the current install before updating. Use **Rollback** on the dashboard to restore the previous version, or **Delete backup** to remove the stored copy.
+
+## Changelog
+
+### 1.1.0
+- Production hardening: WP_Filesystem, atomic rollback, scoped download auth
+- No blocking GitHub calls during update transient builds
+- Hourly cron with per-repository due intervals
+- Settings API, WP_List_Table admin UI, log retention
+- Public repository support without PAT
+- GitHub response caching and retries
 
 ## Architecture
 

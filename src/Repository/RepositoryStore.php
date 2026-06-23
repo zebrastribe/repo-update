@@ -15,6 +15,16 @@ namespace RepoUpdate\Repository;
 final class RepositoryStore {
 
 	/**
+	 * @var Repository[]|null
+	 */
+	private static ?array $all_cache = null;
+
+	/**
+	 * @var Repository[]|null
+	 */
+	private static ?array $enabled_cache = null;
+
+	/**
 	 * Get repositories table name.
 	 */
 	public function table_name(): string {
@@ -54,7 +64,8 @@ final class RepositoryStore {
 			created_at datetime NOT NULL,
 			updated_at datetime NOT NULL,
 			PRIMARY KEY  (id),
-			UNIQUE KEY target_unique (type, target_slug)
+			UNIQUE KEY target_unique (type, target_slug),
+			KEY enabled (enabled)
 		) {$charset};";
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -68,6 +79,15 @@ final class RepositoryStore {
 		global $wpdb;
 
 		$wpdb->query( 'DROP TABLE IF EXISTS ' . $this->table_name() ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		self::invalidate_cache();
+	}
+
+	/**
+	 * Invalidate in-memory caches.
+	 */
+	public static function invalidate_cache(): void {
+		self::$all_cache     = null;
+		self::$enabled_cache = null;
 	}
 
 	/**
@@ -76,11 +96,17 @@ final class RepositoryStore {
 	 * @return Repository[]
 	 */
 	public function all(): array {
+		if ( null !== self::$all_cache ) {
+			return self::$all_cache;
+		}
+
 		global $wpdb;
 
 		$rows = $wpdb->get_results( 'SELECT * FROM ' . $this->table_name() . ' ORDER BY owner, name' ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
 
-		return array_map( array( Repository::class, 'from_row' ), $rows ?: array() );
+		self::$all_cache = array_map( array( Repository::class, 'from_row' ), $rows ?: array() );
+
+		return self::$all_cache;
 	}
 
 	/**
@@ -89,14 +115,22 @@ final class RepositoryStore {
 	 * @return Repository[]
 	 */
 	public function enabled(): array {
-		return array_values(
-			array_filter(
-				$this->all(),
-				static function ( Repository $repo ): bool {
-					return $repo->enabled;
-				}
+		if ( null !== self::$enabled_cache ) {
+			return self::$enabled_cache;
+		}
+
+		global $wpdb;
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT * FROM ' . $this->table_name() . ' WHERE enabled = %d ORDER BY owner, name',
+				1
 			)
 		);
+
+		self::$enabled_cache = array_map( array( Repository::class, 'from_row' ), $rows ?: array() );
+
+		return self::$enabled_cache;
 	}
 
 	/**
@@ -105,16 +139,13 @@ final class RepositoryStore {
 	 * @param int $id Repository ID.
 	 */
 	public function find( int $id ): ?Repository {
-		global $wpdb;
+		foreach ( $this->all() as $repo ) {
+			if ( $repo->id === $id ) {
+				return $repo;
+			}
+		}
 
-		$row = $wpdb->get_row(
-			$wpdb->prepare(
-				'SELECT * FROM ' . $this->table_name() . ' WHERE id = %d',
-				$id
-			)
-		);
-
-		return $row ? Repository::from_row( $row ) : null;
+		return null;
 	}
 
 	/**
@@ -150,43 +181,45 @@ final class RepositoryStore {
 		$id    = isset( $data['id'] ) ? (int) $data['id'] : 0;
 
 		$record = array(
-			'owner'              => sanitize_text_field( (string) $data['owner'] ),
-			'name'               => sanitize_text_field( (string) $data['name'] ),
-			'type'               => in_array( $data['type'] ?? '', array( 'plugin', 'theme' ), true ) ? $data['type'] : 'plugin',
-			'branch'             => sanitize_text_field( (string) ( $data['branch'] ?? 'main' ) ),
-			'check_interval'     => max( 0, (int) ( $data['check_interval'] ?? 0 ) ),
-			'notifications'      => ! empty( $data['notifications'] ) ? 1 : 0,
-			'rollback_enabled'   => ! empty( $data['rollback_enabled'] ) ? 1 : 0,
-			'enabled'            => ! empty( $data['enabled'] ) ? 1 : 0,
-			'target_slug'        => sanitize_text_field( (string) $data['target_slug'] ),
-			'plugin_file'        => sanitize_text_field( (string) ( $data['plugin_file'] ?? '' ) ),
-			'notes'              => sanitize_textarea_field( (string) ( $data['notes'] ?? '' ) ),
-			'installed_version'  => sanitize_text_field( (string) ( $data['installed_version'] ?? '' ) ),
-			'remote_version'     => sanitize_text_field( (string) ( $data['remote_version'] ?? '' ) ),
-			'status'             => sanitize_text_field( (string) ( $data['status'] ?? 'unknown' ) ),
-			'updated_at'         => $now,
+			'owner'             => sanitize_text_field( (string) $data['owner'] ),
+			'name'              => sanitize_text_field( (string) $data['name'] ),
+			'type'              => in_array( $data['type'] ?? '', array( 'plugin', 'theme' ), true ) ? $data['type'] : 'plugin',
+			'branch'            => sanitize_text_field( (string) ( $data['branch'] ?? 'main' ) ),
+			'check_interval'    => max( 0, (int) ( $data['check_interval'] ?? 0 ) ),
+			'notifications'     => ! empty( $data['notifications'] ) ? 1 : 0,
+			'rollback_enabled'  => ! empty( $data['rollback_enabled'] ) ? 1 : 0,
+			'enabled'           => ! empty( $data['enabled'] ) ? 1 : 0,
+			'target_slug'       => sanitize_text_field( (string) $data['target_slug'] ),
+			'plugin_file'       => sanitize_text_field( (string) ( $data['plugin_file'] ?? '' ) ),
+			'notes'             => sanitize_textarea_field( (string) ( $data['notes'] ?? '' ) ),
+			'installed_version' => sanitize_text_field( (string) ( $data['installed_version'] ?? '' ) ),
+			'remote_version'    => sanitize_text_field( (string) ( $data['remote_version'] ?? '' ) ),
+			'status'            => sanitize_text_field( (string) ( $data['status'] ?? 'unknown' ) ),
+			'updated_at'        => $now,
 		);
 
-		if ( ! empty( $data['token'] ) ) {
-			$record['token_encrypted'] = \RepoUpdate\Helpers\Encryption::encrypt( (string) $data['token'] );
+		if ( array_key_exists( 'token', $data ) && '' !== (string) $data['token'] ) {
+			$encrypted = \RepoUpdate\Helpers\Encryption::encrypt( (string) $data['token'] );
+
+			if ( false === $encrypted ) {
+				return 0;
+			}
+
+			$record['token_encrypted'] = $encrypted;
 		}
 
 		if ( $id > 0 ) {
-			if ( empty( $data['token'] ) ) {
-				unset( $record['token_encrypted'] );
-			}
-
-			$wpdb->update( $table, $record, array( 'id' => $id ) );
+			$wpdb->update( $table, $record, array( 'id' => $id ), null, array( '%d' ) );
+			self::invalidate_cache();
 
 			return $id;
 		}
 
-		if ( empty( $record['token_encrypted'] ) ) {
-			return 0;
-		}
+		$record['token_encrypted'] = $record['token_encrypted'] ?? '';
+		$record['created_at']      = $now;
 
-		$record['created_at'] = $now;
 		$wpdb->insert( $table, $record );
+		self::invalidate_cache();
 
 		return (int) $wpdb->insert_id;
 	}
@@ -226,6 +259,7 @@ final class RepositoryStore {
 		$format[]             = '%s';
 
 		$wpdb->update( $this->table_name(), $update, array( 'id' => $id ), $format, array( '%d' ) );
+		self::invalidate_cache();
 	}
 
 	/**
@@ -236,7 +270,10 @@ final class RepositoryStore {
 	public function delete( int $id ): bool {
 		global $wpdb;
 
-		return (bool) $wpdb->delete( $this->table_name(), array( 'id' => $id ), array( '%d' ) );
+		$deleted = (bool) $wpdb->delete( $this->table_name(), array( 'id' => $id ), array( '%d' ) );
+		self::invalidate_cache();
+
+		return $deleted;
 	}
 
 	/**
@@ -258,5 +295,7 @@ final class RepositoryStore {
 			array( '%d', '%s' ),
 			array( '%d' )
 		);
+
+		self::invalidate_cache();
 	}
 }

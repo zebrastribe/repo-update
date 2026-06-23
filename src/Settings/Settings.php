@@ -22,10 +22,11 @@ final class Settings {
 	 * @var array<string, mixed>
 	 */
 	private array $defaults = array(
-		'check_interval'     => 12,
-		'github_timeout'     => 30,
-		'logging_enabled'    => true,
-		'delete_on_uninstall' => true,
+		'check_interval'       => 12,
+		'github_timeout'       => 30,
+		'logging_enabled'      => true,
+		'log_retention_days'   => 30,
+		'delete_on_uninstall'  => true,
 	);
 
 	/**
@@ -33,7 +34,7 @@ final class Settings {
 	 */
 	public function set_defaults(): void {
 		if ( false === get_option( self::OPTION_KEY, false ) ) {
-			update_option( self::OPTION_KEY, $this->defaults );
+			add_option( self::OPTION_KEY, $this->defaults, '', false );
 		}
 	}
 
@@ -76,10 +77,27 @@ final class Settings {
 
 		$merged['check_interval']      = max( 1, (int) $merged['check_interval'] );
 		$merged['github_timeout']      = max( 5, (int) $merged['github_timeout'] );
-		$merged['logging_enabled']       = ! empty( $merged['logging_enabled'] );
+		$merged['log_retention_days']  = max( 1, (int) $merged['log_retention_days'] );
+		$merged['logging_enabled']     = ! empty( $merged['logging_enabled'] );
 		$merged['delete_on_uninstall'] = ! empty( $merged['delete_on_uninstall'] );
 
-		update_option( self::OPTION_KEY, $merged );
+		update_option( self::OPTION_KEY, $merged, false );
+	}
+
+	/**
+	 * Sanitize settings from the Settings API.
+	 *
+	 * @param array<string, mixed> $input Raw input.
+	 * @return array<string, mixed>
+	 */
+	public function sanitize( array $input ): array {
+		return array(
+			'check_interval'      => max( 1, (int) ( $input['check_interval'] ?? 12 ) ),
+			'github_timeout'      => max( 5, (int) ( $input['github_timeout'] ?? 30 ) ),
+			'logging_enabled'     => ! empty( $input['logging_enabled'] ),
+			'log_retention_days'  => max( 1, (int) ( $input['log_retention_days'] ?? 30 ) ),
+			'delete_on_uninstall' => ! empty( $input['delete_on_uninstall'] ),
+		);
 	}
 
 	/**
@@ -101,6 +119,13 @@ final class Settings {
 	 */
 	public function is_logging_enabled(): bool {
 		return (bool) $this->get( 'logging_enabled', true );
+	}
+
+	/**
+	 * Log retention in days.
+	 */
+	public function get_log_retention_days(): int {
+		return (int) $this->get( 'log_retention_days', 30 );
 	}
 
 	/**
