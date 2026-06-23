@@ -83,11 +83,19 @@ The GitHub client implements `ProviderInterface` so GitLab, Bitbucket, and other
 
 If **Delete settings on uninstall** is enabled in Settings, deactivating and deleting the plugin removes options, database tables, logs, rollback copies, and scheduled events.
 
-## Development
+## Testing
 
 ```bash
-composer install   # optional; fallback PSR-4 autoloader included
+# Requires Docker
+./bin/run-tests.sh
+
+# Or locally with PHP 8.2+
+composer install
+composer test
 ```
+
+CI runs unit and smoke tests on every push via GitHub Actions.
+
 
 ## License
 

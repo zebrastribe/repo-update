@@ -6,12 +6,32 @@
     "require": {
         "php": ">=7.4"
     },
+    "require-dev": {
+        "brain/monkey": "^2.6",
+        "phpunit/phpunit": "^9.6"
+    },
     "autoload": {
         "psr-4": {
             "RepoUpdate\\": "src/"
         }
     },
+    "autoload-dev": {
+        "psr-4": {
+            "RepoUpdate\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test:unit": "phpunit --testsuite Unit",
+        "test:smoke": "phpunit --testsuite Smoke"
+    },
     "config": {
-        "sort-packages": true
+        "sort-packages": true,
+        "platform": {
+            "php": "8.2.0"
+        },
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
     }
 }
